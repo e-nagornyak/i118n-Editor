@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Loading…</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body { height: 100%; overflow: hidden; }
+      body {
+        display: flex; align-items: center; justify-content: center;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+        background: linear-gradient(135deg, #0f172a 0%, #312e81 50%, #7c3aed 100%);
+        color: #f1f5f9;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      .card {
+        text-align: center;
+        padding: 24px 40px;
+        backdrop-filter: blur(20px);
+      }
+      .glyph {
+        font-size: 56px;
+        margin-bottom: 14px;
+        animation: float 2.4s ease-in-out infinite;
+      }
+      @keyframes float {
+        0%, 100% { transform: translateY(0); }
+        50%      { transform: translateY(-6px); }
+      }
+      .title {
+        font-size: 22px; font-weight: 700; letter-spacing: -0.4px;
+        margin-bottom: 6px;
+      }
+      .subtitle {
+        font-size: 12px; opacity: 0.75; margin-bottom: 22px;
+      }
+      .bar {
+        width: 200px; height: 3px; margin: 0 auto;
+        border-radius: 3px; overflow: hidden;
+        background: rgba(255, 255, 255, 0.12);
+        position: relative;
+      }
+      .bar::after {
+        content: ""; position: absolute; inset: 0;
+        background: linear-gradient(90deg, transparent, #a78bfa 40%, #f472b6 60%, transparent);
+        animation: slide 1.2s linear infinite;
+      }
+      @keyframes slide {
+        0%   { transform: translateX(-100%); }
+        100% { transform: translateX(100%);  }
+      }
+      .status {
+        margin-top: 14px; font-size: 11px; opacity: 0.6;
+        font-variant-numeric: tabular-nums;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="glyph">🌐</div>
+      <div class="title">i18n Editor</div>
+      <div class="subtitle">Tauri edition</div>
+      <div class="bar"></div>
+      <div class="status" id="status">Starting…</div>
+    </div>
+    <script type="module">
+      import { listen } from '@tauri-apps/api/event'
+      // Passive listener so main can post progress ticks if needed.
+      listen('splash:status', (e) => {
+        document.getElementById('status').textContent = String(e.payload || '')
+      })
+    </script>
+  </body>
+</html>
