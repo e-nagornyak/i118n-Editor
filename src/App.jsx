@@ -3,22 +3,39 @@ import { listen } from '@tauri-apps/api/event'
 import {
   Save, RotateCw, Undo2, Redo2, Sun, Moon, Settings as SettingsIcon,
   Plus, Trash2, Search, FolderKanban, ArrowRightLeft, TreePine, Table as TableIcon,
-  Sparkles, PauseCircle, ChevronRight, Filter, Command as CmdIcon, AlertTriangle,
+  Sparkles, PauseCircle, ChevronRight, Filter, Command as CmdIcon, AlertTriangle, Equal,
   PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react'
 import { api } from './lib/api.js'
 import { FLAG, LANG_NAMES, flagFor, uid, snap } from './lib/consts.js'
-import { translateOne, translateBatch, getProvider, providerLabel, PROVIDERS } from './lib/translate.js'
-import { scanPlaceholderIssues } from './lib/placeholders.js'
+import { translateOne, translateBatch, getProvider, providerLabel, PROVIDERS, CLAUDE_BATCH } from './lib/translate.js'
+import { scanIssues, pluralCategories } from './lib/issues.js'
 import VirtualTable from './components/VirtualTable.jsx'
 import TreeView from './components/TreeView.jsx'
 import LogsView from './components/LogsView.jsx'
+import UsageView from './components/UsageView.jsx'
 import CommandPalette from './components/CommandPalette.jsx'
 import FindReplaceModal from './components/FindReplace.jsx'
 import { log } from './lib/logs.js'
 import {
   Confirm, SettingsModal, AutoTranslateModal, DiffModal, NewProjectModal, LangEditModal,
+  RenameKeyModal, QuitModal,
 } from './components/Modals.jsx'
+
+function projectInitials(name) {
+  const words = (name || '').trim().split(/[\s_.\-/]+/).filter(Boolean)
+  if (!words.length) return '?'
+  const chars = words.length > 1
+    ? [Array.from(words[0])[0], Array.from(words[1])[0]]
+    : Array.from(words[0]).slice(0, 2)
+  return chars.join('').toUpperCase()
+}
+
+function projectColor(name) {
+  let h = 0
+  for (const c of name || '') h = (h * 31 + c.codePointAt(0)) >>> 0
+  return `hsl(${h % 360} 55% 48%)`
+}
 
 export default function App() {
   // ── Theme ─────────────────────────────────────────────────────────────────
@@ -28,10 +45,22 @@ export default function App() {
     try { localStorage.setItem('i18n-theme', isDark ? 'dark' : 'light') } catch {}
   }, [isDark])
 
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('i18n-sidebar') === 'collapsed')
+  const [sidebarCompact, setSidebarCompact] = useState(() => localStorage.getItem('i18n-sidebar') === 'compact')
   useEffect(() => {
-    try { localStorage.setItem('i18n-sidebar', sidebarCollapsed ? 'collapsed' : 'open') } catch {}
-  }, [sidebarCollapsed])
+    try { localStorage.setItem('i18n-sidebar', sidebarCompact ? 'compact' : 'open') } catch {}
+  }, [sidebarCompact])
+  // The sidebar clips its overflow, so rail tooltips are rendered at app level.
+  const [railTip, setRailTip] = useState(null)
+  useEffect(() => { if (!sidebarCompact) setRailTip(null) }, [sidebarCompact])
+  const tipProps = (text) => sidebarCompact
+    ? {
+        onMouseEnter: (e) => {
+          const r = e.currentTarget.getBoundingClientRect()
+          setRailTip({ text, x: r.right + 10, y: r.top + r.height / 2 })
+        },
+        onMouseLeave: () => setRailTip(null),
+      }
+    : { title: text }
 
   // ── Data ──────────────────────────────────────────────────────────────────
   const [projects, setProjects] = useState([])
@@ -72,9 +101,13 @@ export default function App() {
   const [showPalette, setShowPalette] = useState(false)
   const [showFindReplace, setShowFindReplace] = useState(false)
   const [dirtyLangs, setDirtyLangs] = useState(() => new Set())
-  const [placeholderIssues, setPlaceholderIssues] = useState({})
+  const [issues, setIssues] = useState({})
+  // What's on disk, per language — cells that differ get a "modified" mark.
+  const [savedSnap, setSavedSnap] = useState({})
+  const [renameFrom, setRenameFrom] = useState(null)
+  const [quitDlg, setQuitDlg] = useState(null)
   const [flashCell, setFlashCell] = useState(null)
-  const issueCursorRef = useRef(-1)
+  const issueCursorRef = useRef({})
   const flashTimerRef = useRef(null)
   const tableRef = useRef(null)
 
@@ -119,7 +152,7 @@ export default function App() {
       if (e.key === 'y')                { e.preventDefault(); redo() }
       if (e.key === 'k')                { e.preventDefault(); setShowPalette(v => !v) }
       if (e.key === 'f' && e.shiftKey)  { e.preventDefault(); setShowFindReplace(true) }
-      if (e.key === 'b')                { e.preventDefault(); setSidebarCollapsed(v => !v) }
+      if (e.key === 'b')                { e.preventDefault(); setSidebarCompact(v => !v) }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
@@ -164,6 +197,7 @@ export default function App() {
       namespaceMissing: {}, // computed on demand after edits
     })
     histRef.current = { stack: [snap(res.translations)], pos: 0 }
+    setSavedSnap(res.translations)
     setDirtyLangs(new Set())
     // Persist any auto-added languages from folder scan
     if (res.added_languages?.length) {
@@ -201,14 +235,14 @@ export default function App() {
   useEffect(() => {
     clearTimeout(phTimerRef.current)
     phTimerRef.current = setTimeout(() => {
-      if (!languages.length || !stats.allKeys.length) { setPlaceholderIssues({}); return }
-      const issues = scanPlaceholderIssues({
+      if (!languages.length || !stats.allKeys.length) { setIssues({}); return }
+      setIssues(scanIssues({
         translations, languages, baseLanguage, keys: stats.allKeys,
-      })
-      setPlaceholderIssues(issues)
+        ignored: new Set(currentProject?.ignoredIssues || []),
+      }))
     }, 500)
     return () => clearTimeout(phTimerRef.current)
-  }, [translations, languages, baseLanguage, stats.allKeys])
+  }, [translations, languages, baseLanguage, stats.allKeys, currentProject?.ignoredIssues])
 
   // File watcher — subscribe once on mount; the Rust side pushes debounced
   // change events for the current project's locales folder.
@@ -376,12 +410,31 @@ export default function App() {
 
   // ── Keys ────────────────────────────────────────────────────────────────
   const allKeys = stats.allKeys
-  // scanPlaceholderIssues walks keys then languages, so insertion order is
-  // already table order — next/prev navigation relies on that.
-  const issueList = useMemo(() => Object.keys(placeholderIssues).map(id => {
-    const i = id.indexOf(':')
-    return { lang: id.slice(0, i), key: id.slice(i + 1) }
-  }), [placeholderIssues])
+  // Table order (key, then column) so next/prev navigation walks the grid.
+  const issueList = useMemo(() => {
+    const list = []
+    if (!Object.keys(issues).length) return list
+    for (const key of allKeys) for (const l of languages) {
+      const issue = issues[`${l.code}:${key}`]
+      if (issue) list.push({ lang: l.code, key, issue })
+    }
+    return list
+  }, [issues, allKeys, languages])
+  // Real errors (broken placeholders / plurals) vs. "probably untranslated"
+  // hints — counted and navigated separately so hints don't drown errors.
+  const errorList = useMemo(() => issueList.filter(x => x.issue.placeholder || x.issue.plural), [issueList])
+  const sameList = useMemo(() => issueList.filter(x => x.issue.same), [issueList])
+  const issueBreakdown = useMemo(() => {
+    let placeholder = 0, plural = 0
+    for (const { issue } of errorList) {
+      if (issue.placeholder) placeholder++
+      if (issue.plural) plural++
+    }
+    return [
+      placeholder && `${placeholder} placeholder mismatch${placeholder === 1 ? '' : 'es'}`,
+      plural && `${plural} missing plural form${plural === 1 ? '' : 's'}`,
+    ].filter(Boolean).join('\n')
+  }, [errorList])
   const issueKeys = useMemo(() => new Set(issueList.map(x => x.key)), [issueList])
 
   const filteredKeys = useMemo(() => {
@@ -502,6 +555,86 @@ export default function App() {
       },
     })
   }
+  const deleteKeys = (keys) => {
+    if (!keys.length) return
+    setConfirmDlg({
+      message: `Delete ${keys.length} key${keys.length !== 1 ? 's' : ''} from every language?`,
+      onConfirm: () => {
+        const drop = new Set(keys)
+        mutate(prev => {
+          const next = { ...prev }
+          languages.forEach(l => {
+            next[l.code] = Object.fromEntries(Object.entries(next[l.code] || {}).filter(([k]) => !drop.has(k)))
+          })
+          return next
+        })
+        setSelectedKeys(prev => new Set([...prev].filter(k => !drop.has(k))))
+        showToast(`✓ Deleted ${keys.length} key${keys.length !== 1 ? 's' : ''}`)
+      },
+    })
+  }
+
+  // `langCodes` limits which files get the new (empty) entries — plural forms
+  // only belong in languages that use that category.
+  const addKeys = (keys, langCodes = null) => {
+    const fresh = keys.filter(k => !allKeys.includes(k))
+    if (!fresh.length) { showToast('Keys already exist'); return }
+    mutate(prev => {
+      const next = { ...prev }
+      languages.forEach(l => {
+        if (langCodes && !langCodes.includes(l.code)) return
+        const m = { ...(next[l.code] || {}) }
+        fresh.forEach(k => { if (!(k in m)) m[k] = '' })
+        next[l.code] = m
+      })
+      return next
+    })
+    showToast(`✓ Added ${fresh.length} key${fresh.length !== 1 ? 's' : ''}`)
+  }
+
+  // Renames a key and everything nested under it, keeping each entry's
+  // position so the written files diff cleanly.
+  const renameKeys = (from, to) => {
+    const map = (k) => (k === from || k.startsWith(from + '.')) ? to + k.slice(from.length) : null
+    mutate(prev => {
+      const next = {}
+      for (const [code, m] of Object.entries(prev)) {
+        next[code] = Object.fromEntries(Object.entries(m || {}).map(([k, v]) => [map(k) ?? k, v]))
+      }
+      return next
+    })
+    setSelectedKeys(prev => new Set([...prev].map(k => map(k) ?? k)))
+    setTreeExpanded(prev => Object.fromEntries(Object.entries(prev).map(([k, v]) => [map(k) ?? k, v])))
+    setRenameFrom(null)
+    showToast(`✓ Renamed to ${to}`)
+    log.info('keys', `rename ${from} → ${to}`)
+    if (viewMode === 'table' && allKeys.includes(from)) {
+      setTimeout(() => tableRef.current?.scrollToKey?.(to), 80)
+    }
+  }
+
+  const handleIssueClick = useCallback((langCode, key, issue) => {
+    if (issue.plural?.addKeys) {
+      const forms = issue.plural.addKeys
+      const needs = (l) => {
+        const cats = pluralCategories(l)
+        return forms.some(k => cats.includes(k.slice(k.lastIndexOf('_') + 1)))
+      }
+      addKeysRef.current(forms, languages.filter(needs).map(l => l.code))
+      return
+    }
+    if (issue.same && currentProject) {
+      const id = `${langCode}:${key}`
+      const ignored = new Set(currentProject.ignoredIssues || [])
+      ignored.add(id)
+      persistProject({ ...currentProject, ignoredIssues: [...ignored] })
+      showToast('Marked as intentional', 'info')
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [languages, currentProject])
+  const addKeysRef = useRef(addKeys)
+  addKeysRef.current = addKeys
+
   const askBulkAutoTranslate = () => {
     const keys = [...selectedKeys]; if (!keys.length) return
     const nonBase = languages.filter(l => l.code !== baseLanguage)
@@ -596,7 +729,11 @@ export default function App() {
       await persistProject(updated)
     }
     const [res] = await api.saveLocales([{ filePath, flat: translations[lang.code] || {}, format: formatsRef.current[langCode] || null }])
-    if (res?.success) { showToast(`✓ Saved ${lang.label}`); setDirtyLangs(prev => { const n = new Set(prev); n.delete(langCode); return n }) }
+    if (res?.success) {
+      showToast(`✓ Saved ${lang.label}`)
+      setDirtyLangs(prev => { const n = new Set(prev); n.delete(langCode); return n })
+      setSavedSnap(prev => ({ ...prev, [langCode]: translations[langCode] || {} }))
+    }
     else showToast(`Error: ${res?.error || 'unknown'}`, 'error')
   }
 
@@ -646,10 +783,33 @@ export default function App() {
       // Wipe dirty state — everything on disk is now what's in memory.
       if (!errors.length) setDirtyLangs(new Set())
       else setDirtyLangs(prev => { const n = new Set(prev); withFile.forEach((l, i) => results[i]?.success && n.delete(l.code)); return n })
+      setSavedSnap(prev => {
+        const n = { ...prev }
+        withFile.forEach((l, i) => { if (results[i]?.success) n[l.code] = translations[l.code] || {} })
+        return n
+      })
     } catch (e) { errors.push(e.message || String(e)) }
     finally { setRewriteStatus(null); setRewriting(false) }
     if (errors.length) showToast(`Written ${written}, errors: ${errors.join('; ')}`, 'error')
     else showToast(`✓ Rewritten ${written} file${written !== 1 ? 's' : ''}`)
+    return errors.length === 0
+  }
+
+  // Rust bounces ⌘Q / window close here; quit right away when nothing is dirty.
+  const quitRef = useRef(null)
+  quitRef.current = () => {
+    if (dirtyLangs.size === 0) { api.confirmQuit(); return }
+    setQuitDlg({ saving: false })
+  }
+  useEffect(() => {
+    let unlisten = null
+    listen('app:quit-requested', () => quitRef.current?.()).then(u => { unlisten = u })
+    return () => { if (unlisten) unlisten() }
+  }, [])
+  const saveAndQuit = async () => {
+    setQuitDlg({ saving: true })
+    if (await executeRewrite()) api.confirmQuit()
+    else setQuitDlg(null)
   }
 
   // ── Auto-translate ─────────────────────────────────────────────────────
@@ -667,7 +827,7 @@ export default function App() {
     const tgtLang = languages.find(l => l.code === targetCode) || { code: targetCode }
     setTranslating(p => ({ ...p, [tKey]: true }))
     try {
-      const r = await translateOne({ src, srcLang, tgtLang })
+      const r = await translateOne({ src, key, srcLang, tgtLang })
       if (r.text) { commitValue(targetCode, key, r.text) }
       else showToast(r.error || 'Translation failed', 'error')
     } catch (e) { showToast(`Network: ${e.message}`, 'error') }
@@ -706,7 +866,7 @@ export default function App() {
     const providerMeta = PROVIDERS.find(p => p.id === providerId)
     // DeepL takes 50 per call, LibreTranslate accepts an array too — the rest
     // are one-at-a-time and translateBatch just loops internally.
-    const CHUNK = providerId === 'deepl' ? 50 : (providerMeta?.batch ? 50 : 1)
+    const CHUNK = providerId === 'claude' ? CLAUDE_BATCH : (providerMeta?.batch ? 50 : 1)
 
     autoCancelRef.current = false
     setAutoRunning(cfg.bulk ? '__bulk__' : cfg.langCode)
@@ -719,7 +879,7 @@ export default function App() {
         if (autoCancelRef.current) break outer
         const chunkKeys = g.keys.slice(i, i + CHUNK)
         const chunkTexts = g.texts.slice(i, i + CHUNK)
-        const r = await translateBatch({ texts: chunkTexts, srcLang, tgtLang })
+        const r = await translateBatch({ texts: chunkTexts, keys: chunkKeys, srcLang, tgtLang })
         for (let j = 0; j < chunkKeys.length; j++) {
           const t = r.translations[j]
           if (t) { commitValue(langCode, chunkKeys[j], t); done++ }
@@ -782,12 +942,13 @@ export default function App() {
     setTimeout(() => tableRef.current?.scrollToKey?.(k), 60)
   }
 
-  const jumpToIssue = (dir = 1) => {
-    if (!issueList.length) return
-    const n = issueList.length
-    const i = ((issueCursorRef.current + dir) % n + n) % n
-    issueCursorRef.current = i
-    const { key, lang } = issueList[i]
+  const jumpToIssue = (list, kind, dir = 1) => {
+    if (!list.length) return
+    const n = list.length
+    const cur = issueCursorRef.current[kind] ?? -1
+    const i = ((cur + dir) % n + n) % n
+    issueCursorRef.current = { ...issueCursorRef.current, [kind]: i }
+    const { key, lang } = list[i]
     setActiveTab('translations')
     setViewMode('table')
     if (!filteredKeys.includes(key)) { setSearch(''); setShowEmptyOnly(false) }
@@ -816,21 +977,22 @@ export default function App() {
 
   // ─── Render ────────────────────────────────────────────────────────────
   return (
-    <div className={`app ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
-      <button className="sidebar-toggle" onClick={() => setSidebarCollapsed(v => !v)}
-        title={sidebarCollapsed ? 'Show sidebar (⌘B)' : 'Hide sidebar (⌘B)'}>
-        {sidebarCollapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
+    <div className={`app ${sidebarCompact ? 'sidebar-compact' : ''}`}>
+      <button className="sidebar-toggle" onClick={() => setSidebarCompact(v => !v)}
+        title={sidebarCompact ? 'Expand sidebar (⌘B)' : 'Compact sidebar (⌘B)'}>
+        {sidebarCompact ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
       </button>
+      {railTip && <div className="rail-tip" style={{ left: railTip.x, top: railTip.y }}>{railTip.text}</div>}
       {/* ── Sidebar ── */}
-      <aside className="sidebar" inert={sidebarCollapsed ? '' : undefined}>
+      <aside className="sidebar">
         <div className="sidebar-header" data-tauri-drag-region>
           <div className="brand-glyph" data-tauri-drag-region>i</div>
-          <div data-tauri-drag-region>
+          <div className="sb-label" data-tauri-drag-region>
             <div className="brand-name" data-tauri-drag-region>i18n Editor</div>
             <div className="brand-sub" data-tauri-drag-region>Tauri edition</div>
           </div>
         </div>
-        <div className="sidebar-section">Projects</div>
+        <div className="sidebar-section sb-label">Projects</div>
         <div className="sidebar-list">
           {projects.length === 0 && (
             <div style={{ padding: 10, color: 'var(--text-faint)', fontSize: 12 }}>No projects yet</div>
@@ -839,9 +1001,9 @@ export default function App() {
             <div key={p.id}
               className={`proj-item ${p.id === currentProjectId ? 'active' : ''}`}
               onClick={() => renamingProjectId !== p.id && switchProject(p.id)}
-              onDoubleClick={(e) => { e.stopPropagation(); setRenamingProjectId(p.id) }}
-              title={renamingProjectId === p.id ? '' : 'Double-click to rename'}>
-              <span className="dot" style={{ opacity: p.id === currentProjectId ? 1 : 0.35 }} />
+              onDoubleClick={(e) => { if (sidebarCompact) return; e.stopPropagation(); setRenamingProjectId(p.id) }}
+              {...(sidebarCompact ? tipProps(p.name) : { title: renamingProjectId === p.id ? '' : 'Double-click to rename' })}>
+              <span className="proj-avatar" style={{ background: projectColor(p.name) }}>{projectInitials(p.name)}</span>
               {renamingProjectId === p.id ? (
                 <input
                   className="rename"
@@ -855,21 +1017,21 @@ export default function App() {
                   }}
                 />
               ) : (
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
+                <span className="sb-label proj-name">{p.name}</span>
               )}
-              {renamingProjectId !== p.id && (
+              {renamingProjectId !== p.id && !sidebarCompact && (
                 <button className="del" onClick={(e) => { e.stopPropagation(); deleteProject(p.id) }}>🗑</button>
               )}
             </div>
           ))}
         </div>
         <div className="sidebar-footer">
-          <button className="btn primary" style={{ flex: 1, justifyContent: 'center' }} onClick={() => setShowNewProject(true)}>
-            <Plus size={14} /> New
+          <button className="btn primary new-proj" onClick={() => setShowNewProject(true)} {...(sidebarCompact ? tipProps('New project') : {})}>
+            <Plus size={14} /><span className="sb-label">New</span>
           </button>
-          <button className="btn ghost" title="Command palette (⌘K)" onClick={() => setShowPalette(true)}><CmdIcon size={14} /></button>
-          <button className="btn ghost" title="Settings" onClick={() => setShowSettings(true)}><SettingsIcon size={14} /></button>
-          <button className="btn ghost" title="Toggle theme" onClick={() => setIsDark(v => !v)}>{isDark ? <Sun size={14} /> : <Moon size={14} />}</button>
+          <button className="btn ghost" {...tipProps('Command palette (⌘K)')} onClick={() => setShowPalette(true)}><CmdIcon size={14} /></button>
+          <button className="btn ghost" {...tipProps('Settings')} onClick={() => setShowSettings(true)}><SettingsIcon size={14} /></button>
+          <button className="btn ghost" {...tipProps('Toggle theme')} onClick={() => setIsDark(v => !v)}>{isDark ? <Sun size={14} /> : <Moon size={14} />}</button>
         </div>
       </aside>
 
@@ -887,6 +1049,7 @@ export default function App() {
               <div className="tabs">
                 <button className={`tab ${activeTab === 'translations' ? 'active' : ''}`} onClick={() => setActiveTab('translations')}>Translations</button>
                 <button className={`tab ${activeTab === 'languages' ? 'active' : ''}`} onClick={() => setActiveTab('languages')}>Languages · {languages.length}</button>
+                <button className={`tab ${activeTab === 'usage' ? 'active' : ''}`} onClick={() => setActiveTab('usage')}>Usage</button>
                 <button className={`tab ${activeTab === 'logs' ? 'active' : ''}`} onClick={() => setActiveTab('logs')}>Logs</button>
               </div>
               <div className="stat-chip">
@@ -894,14 +1057,21 @@ export default function App() {
                 <span style={{ opacity: 0.4 }}>·</span>
                 <span className={stats.missingTotal ? 'missing' : 'ok'}>{stats.missingTotal} missing</span>
                 <span style={{ opacity: 0.4 }}>·</span>
-                {issueList.length ? (
-                  <button className="issues-link" onClick={e => jumpToIssue(e.shiftKey ? -1 : 1)}
-                    title="Placeholder mismatches — click to jump to the next one (⇧-click for previous)">
-                    <AlertTriangle size={11} /> {issueList.length} {issueList.length === 1 ? 'issue' : 'issues'}
+                {errorList.length ? (
+                  <button className="issues-link" onClick={e => jumpToIssue(errorList, 'error', e.shiftKey ? -1 : 1)}
+                    title={`${issueBreakdown}\n\nClick to jump to the next one (⇧-click for previous)`}>
+                    <AlertTriangle size={11} /> {errorList.length} {errorList.length === 1 ? 'issue' : 'issues'}
                   </button>
                 ) : (
                   <span className="ok">0 issues</span>
                 )}
+                {sameList.length > 0 && (<>
+                  <span style={{ opacity: 0.4 }}>·</span>
+                  <button className="issues-link hint" onClick={e => jumpToIssue(sameList, 'same', e.shiftKey ? -1 : 1)}
+                    title={'Same text as the base language where other languages translated it.\nClick the = icon in a cell to mark it as intentional.\n\nClick to jump to the next one (⇧-click for previous)'}>
+                    <Equal size={11} /> {sameList.length} untranslated?
+                  </button>
+                </>)}
               </div>
               <div style={{ flex: 1 }} data-tauri-drag-region />
               <button className="btn ghost" onClick={() => setShowPalette(true)} title="Command palette (⌘K)"><CmdIcon size={14} /></button>
@@ -1094,8 +1264,11 @@ export default function App() {
                     allIndeterminate={filteredSelectionState.indeterminate}
                     filledByLang={stats.filled}
                     onReorderLang={reorderLanguages}
-                    placeholderIssues={placeholderIssues}
+                    issues={issues}
                     flashCell={flashCell}
+                    onIssueClick={handleIssueClick}
+                    onRenameKey={setRenameFrom}
+                    savedTranslations={savedSnap}
                   />
                 ) : (
                   <TreeView
@@ -1111,11 +1284,22 @@ export default function App() {
                     translating={translating}
                     onCopyKey={onCopyKey}
                     copiedKey={copiedKey}
+                    onRenameKey={setRenameFrom}
                   />
                 )}
               </>
             )}
 
+            {activeTab === 'usage' && (
+              <UsageView
+                project={currentProject}
+                allKeys={allKeys}
+                onSetSourcePath={(dir) => persistProject({ ...currentProject, sourcePath: dir })}
+                onDeleteKeys={deleteKeys}
+                onAddKeys={addKeys}
+                onJump={jumpToKey}
+              />
+            )}
             {activeTab === 'logs' && <LogsView />}
 
             <div className="footer">
@@ -1169,10 +1353,22 @@ export default function App() {
             askAutoTranslate,
             setViewMode, setActiveTab, openSettings: () => setShowSettings(true),
             toggleTheme: () => setIsDark(v => !v),
-            sidebarCollapsed, toggleSidebar: () => setSidebarCollapsed(v => !v),
+            sidebarCompact, toggleSidebar: () => setSidebarCompact(v => !v),
             jumpToKey,
           }}
           onClose={() => setShowPalette(false)}
+        />
+      )}
+      {renameFrom && (
+        <RenameKeyModal from={renameFrom} allKeys={allKeys} onRename={renameKeys} onCancel={() => setRenameFrom(null)} />
+      )}
+      {quitDlg && (
+        <QuitModal
+          langs={languages.filter(l => dirtyLangs.has(l.code)).map(l => l.label || l.code)}
+          saving={quitDlg.saving}
+          onSave={saveAndQuit}
+          onDiscard={() => api.confirmQuit()}
+          onCancel={() => setQuitDlg(null)}
         />
       )}
       {showFindReplace && currentProject && (

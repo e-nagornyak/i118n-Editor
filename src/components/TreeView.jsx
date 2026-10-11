@@ -1,4 +1,5 @@
 import React from 'react'
+import { Pencil } from 'lucide-react'
 import CellInput from './CellInput.jsx'
 import { flagFor } from '../lib/consts.js'
 
@@ -19,7 +20,7 @@ function buildTree(keys) {
 function Node({ name, node, depth, ctx }) {
   const {
     languages, translations, baseLanguage, expanded, toggleExpand,
-    namespaceMissing, onCommit, onAutoTranslate, translating, onCopyKey, copiedKey,
+    namespaceMissing, onCommit, onAutoTranslate, translating, onCopyKey, copiedKey, onRenameKey,
   } = ctx
   const hasChildren = Object.keys(node.__children).length > 0
   const isExpanded = expanded[node.__fullKey]
@@ -42,6 +43,10 @@ function Node({ name, node, depth, ctx }) {
               {missing > 0 && <span className="badge warn">{missing} missing</span>}
               {missing === 0 && hasChildren && <span className="badge">{Object.keys(node.__children).length}</span>}
             </>
+          )}
+          {onRenameKey && (
+            <button className="rename-key" onClick={() => onRenameKey(node.__fullKey)}
+              title={node.__isLeaf && !hasChildren ? 'Rename key' : 'Rename namespace'}><Pencil size={11} /></button>
           )}
         </div>
         {node.__isLeaf

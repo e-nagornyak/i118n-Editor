@@ -1516,12 +1516,14 @@ dependencies = [
  "dirs 5.0.1",
  "notify-debouncer-mini",
  "rayon",
+ "regex",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-http",
+ "walkdir",
 ]
 
 [[package]]

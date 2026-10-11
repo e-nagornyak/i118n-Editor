@@ -1,6 +1,6 @@
-import React, { forwardRef, useRef, useState, useImperativeHandle, memo, useMemo } from 'react'
+import React, { forwardRef, useRef, useState, useImperativeHandle, memo, useMemo, useCallback } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { Sparkles, Trash2, Copy, Check, Hourglass } from 'lucide-react'
+import { Sparkles, Trash2, Check, Hourglass, Pencil } from 'lucide-react'
 import CellInput from './CellInput.jsx'
 import { flagFor } from '../lib/consts.js'
 
@@ -42,15 +42,17 @@ function Highlight({ text, query }) {
 const Row = memo(function Row({
   rowKey, languages, translations, baseLanguage, search,
   selected, onToggleSelect, onCommit, onDelete, onCopyKey, copiedKey,
-  translating, onAutoTranslate, placeholderIssues, flashLang,
+  translating, onAutoTranslate, issues, flashLang,
+  onIssueClick, onNavigate, onRenameKey, savedTranslations,
 }) {
   return (
     <div className="trow" style={{ minHeight: ROW_HEIGHT }}>
       <div className="tcell select sticky">
-        <input type="checkbox" checked={selected} onChange={() => onToggleSelect(rowKey)} />
+        <input type="checkbox" tabIndex={-1} checked={selected} onChange={() => onToggleSelect(rowKey)} />
       </div>
       <div className="tcell key sticky" style={{ left: 34, width: KEY_WIDTH }}>
-        <button className={`copy-key ${copiedKey === rowKey ? 'copied' : ''}`} onClick={() => onCopyKey(rowKey)} title="Click to copy">
+        <button className="rename-key" tabIndex={-1} onClick={() => onRenameKey(rowKey)} title="Rename key"><Pencil size={11} /></button>
+        <button tabIndex={-1} className={`copy-key ${copiedKey === rowKey ? 'copied' : ''}`} onClick={() => onCopyKey(rowKey)} title="Click to copy">
           {copiedKey === rowKey
             ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Check size={11} /> Copied!</span>
             : <Highlight text={rowKey} query={search} />}
@@ -60,10 +62,11 @@ const Row = memo(function Row({
         const val = translations[lang.code]?.[rowKey] ?? ''
         const empty = !val
         const tKey = `${rowKey}-${lang.code}`
-        const issue = placeholderIssues?.[`${lang.code}:${rowKey}`]
+        const issue = issues?.[`${lang.code}:${rowKey}`]
+        const modified = savedTranslations && (savedTranslations[lang.code]?.[rowKey] ?? '') !== val
         return (
           <div key={lang.code} data-cell={`${lang.code}:${rowKey}`}
-            className={`tcell val ${empty ? 'missing' : ''} ${flashLang === lang.code ? 'flash' : ''}`}
+            className={`tcell val ${empty ? 'missing' : ''} ${modified ? 'modified' : ''} ${flashLang === lang.code ? 'flash' : ''}`}
             style={{ width: valWidth(lang.code) }}>
             <CellInput
               value={val}
@@ -71,9 +74,11 @@ const Row = memo(function Row({
               placeholder={lang.code === baseLanguage ? '— base —' : 'missing…'}
               onCommit={(v) => onCommit(lang.code, rowKey, v)}
               issue={issue}
+              onIssueClick={(iss) => onIssueClick(lang.code, rowKey, iss)}
+              onNavigate={(dir) => onNavigate(rowKey, lang.code, dir)}
             />
             {lang.code !== baseLanguage && (
-              <button className="translate-btn" onClick={() => onAutoTranslate(rowKey, lang.code)} disabled={!!translating[tKey]} title="Auto-translate">
+              <button tabIndex={-1} className="translate-btn" onClick={() => onAutoTranslate(rowKey, lang.code)} disabled={!!translating[tKey]} title="Auto-translate">
                 {translating[tKey] ? <Hourglass size={13} /> : <Sparkles size={13} />}
               </button>
             )}
@@ -81,7 +86,7 @@ const Row = memo(function Row({
         )
       })}
       <div className="tcell actions">
-        <button className="del-btn" onClick={() => onDelete(rowKey)} title="Delete key"><Trash2 size={14} /></button>
+        <button tabIndex={-1} className="del-btn" onClick={() => onDelete(rowKey)} title="Delete key"><Trash2 size={14} /></button>
       </div>
     </div>
   )
@@ -92,7 +97,8 @@ export default forwardRef(function VirtualTable(props, apiRef) {
     keys, languages, translations, baseLanguage, search,
     selectedKeys, onToggleSelect, onCommit, onDelete, onCopyKey, copiedKey,
     translating, onAutoTranslate, onToggleAll, allChecked, allIndeterminate,
-    filledByLang, onReorderLang, placeholderIssues, flashCell,
+    filledByLang, onReorderLang, issues, flashCell,
+    onIssueClick, onRenameKey, savedTranslations,
   } = props
 
   const parentRef = useRef(null)
@@ -165,7 +171,26 @@ export default forwardRef(function VirtualTable(props, apiRef) {
     getScrollElement: () => parentRef.current,
     estimateSize: () => ROW_HEIGHT,
     overscan: 12,
+    // Rows sit below the sticky header, which the virtualizer doesn't know about.
+    scrollPaddingEnd: ROW_HEIGHT + 10,
   })
+
+  const keysRef = useRef(keys)
+  keysRef.current = keys
+  const navigate = useCallback((k, langCode, dir) => {
+    const ks = keysRef.current
+    const idx = ks.indexOf(k) + dir
+    if (idx < 0 || idx >= ks.length) return
+    virt.scrollToIndex(idx, { align: 'auto' })
+    const sel = `[data-cell="${CSS.escape(`${langCode}:${ks[idx]}`)}"] .cell-input`
+    // The target row may only mount after the scroll lands.
+    const focus = (tries) => {
+      const el = parentRef.current?.querySelector(sel)
+      if (el) el.focus()
+      else if (tries > 0) requestAnimationFrame(() => focus(tries - 1))
+    }
+    requestAnimationFrame(() => focus(6))
+  }, [virt])
 
   return (
     <div ref={parentRef} className="table-wrap" style={widthStyle}>
@@ -243,8 +268,12 @@ export default forwardRef(function VirtualTable(props, apiRef) {
                 copiedKey={copiedKey}
                 translating={translating}
                 onAutoTranslate={onAutoTranslate}
-                placeholderIssues={placeholderIssues}
+                issues={issues}
                 flashLang={flashCell?.key === k ? flashCell.lang : null}
+                onIssueClick={onIssueClick}
+                onNavigate={navigate}
+                onRenameKey={onRenameKey}
+                savedTranslations={savedTranslations}
               />
             </div>
           )

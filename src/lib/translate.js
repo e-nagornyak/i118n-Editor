@@ -3,10 +3,12 @@ import { deeplCodeFor, translatorCodeFor } from './consts'
 // apply — most translation APIs don't send Access-Control-Allow-Origin.
 import { fetch } from '@tauri-apps/plugin-http'
 import { log } from './logs'
+import Anthropic from '@anthropic-ai/sdk'
 
 // ── Provider selection & settings ───────────────────────────────────────────
 
 export const PROVIDERS = [
+  { id: 'claude',   label: 'Claude',          needsKey: true,  batch: true,  note: 'Context-aware (key names, glossary) · keeps placeholders · API key required' },
   { id: 'deepl',    label: 'DeepL',           needsKey: true,  batch: true,  note: 'Best quality · API key required' },
   { id: 'mymemory', label: 'MyMemory',        needsKey: false, batch: false, note: 'Free · ~1000 words/day per IP' },
   { id: 'lingva',   label: 'Lingva Translate',needsKey: false, batch: false, note: 'Free Google Translate proxy · no key' },
@@ -48,15 +50,16 @@ function normalizeCode(code) {
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
-export async function translateBatch({ texts, srcLang, tgtLang }) {
+// `keys` is optional context — only providers that can use it (Claude) read it.
+export async function translateBatch({ texts, keys, srcLang, tgtLang }) {
   if (!texts?.length) return { translations: [] }
   const provider = getProvider()
   const impl = IMPLS[provider] || IMPLS.mymemory
-  return impl({ texts, srcLang, tgtLang })
+  return impl({ texts, keys, srcLang, tgtLang })
 }
 
-export async function translateOne({ src, srcLang, tgtLang }) {
-  const r = await translateBatch({ texts: [src], srcLang, tgtLang })
+export async function translateOne({ src, key, srcLang, tgtLang }) {
+  const r = await translateBatch({ texts: [src], keys: key ? [key] : undefined, srcLang, tgtLang })
   if (r.error) return { text: null, error: r.error }
   return { text: r.translations[0] ?? null }
 }
@@ -200,7 +203,97 @@ async function libre({ texts, srcLang, tgtLang }) {
   return { translations: out }
 }
 
-const IMPLS = { deepl, mymemory, lingva, google, libre }
+// ── Claude ─────────────────────────────────────────────────────────────────
+export const CLAUDE_MODELS = [
+  { id: 'claude-opus-5-5',   label: 'Claude Opus 5.5 — best quality' },
+  { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5 — faster, cheaper' },
+  { id: 'claude-haiku-5-5',  label: 'Claude Haiku 5.5 — fastest, cheapest' },
+]
+export const CLAUDE_BATCH = 40
+
+function claudeConfig() {
+  return {
+    key: localStorage.getItem('claude-key') || '',
+    model: localStorage.getItem('claude-model') || CLAUDE_MODELS[0].id,
+    glossary: localStorage.getItem('claude-glossary') || '',
+  }
+}
+
+const langName = (l) => `${l?.label || l?.code} (${translatorCodeFor(l)})`
+
+async function claude({ texts, keys, srcLang, tgtLang }) {
+  const { key, model, glossary } = claudeConfig()
+  const out = new Array(texts.length).fill(null)
+  if (!key) return { translations: out, error: 'Claude API key not set (Settings → Claude)' }
+  // The webview has no CORS exemption — route the SDK through Tauri's HTTP
+  // plugin like every other provider.
+  const client = new Anthropic({ apiKey: key, fetch, dangerouslyAllowBrowser: true })
+
+  const system = [
+    `You translate UI strings of a software product from ${langName(srcLang)} to ${langName(tgtLang)}.`,
+    'Each item has an id, the i18n key it belongs to (use it as context: "button.save" is an action label, "errors.*" are error messages), and the source text.',
+    'Keep every placeholder, interpolation token and markup tag exactly as written: {name}, {{count}}, %s, %1$s, %{x}, <0>…</0>, <b>…</b>. Never translate text inside braces.',
+    'Match the tone and length of the source; UI labels stay short. Preserve leading/trailing whitespace and line breaks.',
+    'Return one translation per item, with the same id.',
+    glossary.trim() ? `Glossary — always use these terms:\n${glossary.trim()}` : '',
+  ].filter(Boolean).join('\n')
+
+  for (let i = 0; i < texts.length; i += CLAUDE_BATCH) {
+    const items = texts.slice(i, i + CLAUDE_BATCH).map((text, j) => ({ id: i + j, key: keys?.[i + j] || '', text }))
+    log.debug('claude', `${model} ${srcLang?.code}→${tgtLang?.code} · ${items.length}`, { first: items[0]?.text })
+    let res
+    try {
+      res = await client.beta.messages.create({
+        model,
+        max_tokens: 16000,
+        betas: ['server-side-fallback-2026-07-01'],
+        fallbacks: 'default',
+        output_config: {
+          effort: 'low',
+          format: {
+            type: 'json_schema',
+            schema: {
+              type: 'object',
+              properties: {
+                translations: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: { id: { type: 'integer' }, text: { type: 'string' } },
+                    required: ['id', 'text'],
+                    additionalProperties: false,
+                  },
+                },
+              },
+              required: ['translations'],
+              additionalProperties: false,
+            },
+          },
+        },
+        system,
+        messages: [{ role: 'user', content: JSON.stringify(items) }],
+      })
+    } catch (e) {
+      if (e instanceof Anthropic.AuthenticationError) { log.error('claude', 'invalid API key'); return { translations: out, error: 'Claude: invalid API key', quota: true } }
+      if (e instanceof Anthropic.RateLimitError) { log.error('claude', 'rate limited'); return { translations: out, error: 'Claude: rate limited — try a longer delay', quota: true } }
+      if (e instanceof Anthropic.APIError) { log.error('claude', `HTTP ${e.status}: ${e.message}`); return { translations: out, error: `Claude HTTP ${e.status}: ${e.message.slice(0, 140)}` } }
+      log.error('claude', `network: ${e.message}`)
+      return { translations: out, error: `Network: ${e.message}` }
+    }
+    if (res.stop_reason === 'refusal') { log.warn('claude', 'refused', res.stop_details); return { translations: out, error: 'Claude declined this batch' } }
+    if (res.stop_reason === 'max_tokens') log.warn('claude', 'hit max_tokens — batch truncated')
+    const textBlock = res.content.find(b => b.type === 'text')
+    let parsed
+    try { parsed = JSON.parse(textBlock?.text || '') } catch { log.error('claude', 'invalid JSON'); return { translations: out, error: 'Claude: invalid JSON response' } }
+    for (const t of parsed?.translations || []) {
+      if (Number.isInteger(t.id) && t.id >= i && t.id < i + items.length && t.text) out[t.id] = t.text
+    }
+    log.info('claude', `ok ${items.filter(it => out[it.id]).length}/${items.length}`, { usage: res.usage })
+  }
+  return { translations: out }
+}
+
+const IMPLS = { claude, deepl, mymemory, lingva, google, libre }
 
 // ── Connection test — used by Settings modal for any provider ──────────────
 export async function testProvider(providerId) {

@@ -38,7 +38,8 @@ export default function CommandPalette({ ctx, onClose }) {
       { icon: TreePine,       label: 'View: Tree',          run: () => ctx.setViewMode('tree') },
       { icon: SettingsIcon,   label: 'Settings',            run: ctx.openSettings },
       { icon: ctx.isDark ? Sun : Moon, label: ctx.isDark ? 'Switch to Light theme' : 'Switch to Dark theme', run: ctx.toggleTheme },
-      { icon: ctx.sidebarCollapsed ? PanelLeftOpen : PanelLeftClose, label: ctx.sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar', hint: '⌘B', run: ctx.toggleSidebar },
+      { icon: ctx.sidebarCompact ? PanelLeftOpen : PanelLeftClose, label: ctx.sidebarCompact ? 'Expand sidebar' : 'Compact sidebar', hint: '⌘B', run: ctx.toggleSidebar },
+      { icon: Search,         label: 'Code usage — unused & missing keys', run: () => ctx.setActiveTab('usage'), when: !!ctx.currentProject },
       { icon: ScrollText,     label: 'Open Logs',           run: () => ctx.setActiveTab('logs') },
       { icon: FolderKanban,   label: 'New Project',         run: ctx.newProject },
     ]

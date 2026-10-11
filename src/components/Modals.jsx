@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { testProvider, PROVIDERS, getProvider } from '../lib/translate.js'
+import { testProvider, PROVIDERS, getProvider, CLAUDE_MODELS } from '../lib/translate.js'
 import { FLAG } from '../lib/consts.js'
 
 export function Confirm({ message, onConfirm, onCancel, confirmLabel, variant }) {
@@ -24,6 +24,9 @@ export function SettingsModal({ onClose }) {
   const [deeplKey, setDeeplKey] = useState(() => localStorage.getItem('deepl-key') || '')
   const [libreUrl, setLibreUrl] = useState(() => localStorage.getItem('libre-url') || 'https://libretranslate.de')
   const [libreKey, setLibreKey] = useState(() => localStorage.getItem('libre-key') || '')
+  const [claudeKey, setClaudeKey] = useState(() => localStorage.getItem('claude-key') || '')
+  const [claudeModel, setClaudeModel] = useState(() => localStorage.getItem('claude-model') || CLAUDE_MODELS[0].id)
+  const [claudeGlossary, setClaudeGlossary] = useState(() => localStorage.getItem('claude-glossary') || '')
   const [testing, setTesting] = useState(false)
   const [result, setResult] = useState(null)
 
@@ -34,7 +37,14 @@ export function SettingsModal({ onClose }) {
     localStorage.setItem('deepl-enabled', String(provider === 'deepl'))
     localStorage.setItem('libre-url', libreUrl.trim())
     localStorage.setItem('libre-key', libreKey.trim())
+    persistClaude()
     onClose()
+  }
+
+  const persistClaude = () => {
+    localStorage.setItem('claude-key', claudeKey.trim())
+    localStorage.setItem('claude-model', claudeModel)
+    localStorage.setItem('claude-glossary', claudeGlossary)
   }
 
   const runTest = async () => {
@@ -42,6 +52,7 @@ export function SettingsModal({ onClose }) {
     localStorage.setItem('deepl-key', deeplKey.trim())
     localStorage.setItem('libre-url', libreUrl.trim())
     localStorage.setItem('libre-key', libreKey.trim())
+    persistClaude()
     setTesting(true); setResult(null)
     setResult(await testProvider(provider))
     setTesting(false)
@@ -83,6 +94,25 @@ export function SettingsModal({ onClose }) {
               placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx" />
             <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 6 }}>
               Free keys end with <code>:fx</code> — get one at deepl.com/pro
+            </div>
+          </div>
+        )}
+
+        {provider === 'claude' && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Anthropic API key</div>
+            <input className="input" type="password" style={{ width: '100%', marginBottom: 10 }} value={claudeKey} onChange={e => setClaudeKey(e.target.value)}
+              placeholder="sk-ant-…" />
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Model</div>
+            <select className="input" style={{ width: '100%', marginBottom: 10 }} value={claudeModel} onChange={e => setClaudeModel(e.target.value)}>
+              {CLAUDE_MODELS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+            </select>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Glossary (optional) — one rule per line</div>
+            <textarea className="input" rows={4} style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit' }} value={claudeGlossary}
+              onChange={e => setClaudeGlossary(e.target.value)}
+              placeholder={'Workspace → Робочий простір\nDashboard — do not translate'} />
+            <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 6 }}>
+              Get a key at console.anthropic.com. Translates in batches of 40 using key names as context.
             </div>
           </div>
         )}
@@ -259,6 +289,71 @@ export function LangEditModal({ lang, onSave, onCancel }) {
         <div className="actions">
           <button className="btn outline" onClick={onCancel}>Cancel</button>
           <button className="btn primary" onClick={() => onSave(draft)}>💾 Save</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export function RenameKeyModal({ from, allKeys, onRename, onCancel }) {
+  const [to, setTo] = useState(from)
+  const affected = React.useMemo(
+    () => allKeys.filter(k => k === from || k.startsWith(from + '.')),
+    [allKeys, from])
+  const target = to.trim()
+  const error = (() => {
+    if (!target) return 'Key cannot be empty'
+    if (/\s/.test(target) || target.startsWith('.') || target.endsWith('.') || target.includes('..')) return 'Invalid key'
+    if (target === from) return null
+    if (target.startsWith(from + '.')) return 'Cannot move a key inside itself'
+    const moving = new Set(affected)
+    const clash = affected.map(k => target + k.slice(from.length)).find(k => allKeys.includes(k) && !moving.has(k))
+    return clash ? `"${clash}" already exists` : null
+  })()
+  const nested = affected.filter(k => k !== from).length
+  const submit = () => { if (!error && target !== from) onRename(from, target) }
+
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal" style={{ width: 480 }} onClick={e => e.stopPropagation()}>
+        <h2>Rename {nested ? 'namespace' : 'key'}</h2>
+        <div className="sub" style={{ marginBottom: 10 }}>
+          {nested
+            ? <>Renames <strong>{affected.length}</strong> key{affected.length === 1 ? '' : 's'} under <code>{from}</code> in every language.</>
+            : <>Renames <code>{from}</code> in every language. Values stay the same.</>}
+        </div>
+        <input className="input" style={{ width: '100%', fontFamily: "'SF Mono', Menlo, monospace" }} autoFocus value={to}
+          onChange={e => setTo(e.target.value)}
+          onFocus={e => { const i = from.lastIndexOf('.') + 1; e.target.setSelectionRange(i, from.length) }}
+          onKeyDown={e => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') onCancel() }} />
+        {error && target !== from && <div style={{ color: 'var(--danger)', fontSize: 12, marginTop: 6 }}>{error}</div>}
+        {!error && nested > 0 && target !== from && (
+          <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 8, fontFamily: "'SF Mono', Menlo, monospace" }}>
+            {affected.slice(0, 3).map(k => <div key={k}>{k} → {target + k.slice(from.length)}</div>)}
+            {affected.length > 3 && <div>… and {affected.length - 3} more</div>}
+          </div>
+        )}
+        <div className="actions">
+          <button className="btn outline" onClick={onCancel}>Cancel</button>
+          <button className="btn primary" disabled={!!error || target === from} onClick={submit}>Rename</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export function QuitModal({ langs, saving, onSave, onDiscard, onCancel }) {
+  return (
+    <div className="modal-overlay" onClick={saving ? undefined : onCancel}>
+      <div className="modal" style={{ width: 440 }} onClick={e => e.stopPropagation()}>
+        <h2>Unsaved changes</h2>
+        <div className="sub">
+          {langs.length === 1 ? <><strong>{langs[0]}</strong> has</> : <><strong>{langs.join(', ')}</strong> have</>} changes that aren't written to disk yet.
+        </div>
+        <div className="actions">
+          <button className="btn outline" disabled={saving} onClick={onCancel}>Cancel</button>
+          <button className="btn danger" disabled={saving} onClick={onDiscard}>Quit without saving</button>
+          <button className="btn primary" disabled={saving} autoFocus onClick={onSave}>{saving ? 'Saving…' : 'Save & Quit'}</button>
         </div>
       </div>
     </div>

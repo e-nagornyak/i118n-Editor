@@ -22,6 +22,10 @@ export const api = {
 
   // Splash → main handoff
   appReady: () => invoke('app_ready'),
+  confirmQuit: () => invoke('confirm_quit'),
+
+  // Source-code scan for unused / missing keys
+  scanCodeUsage: (input) => invoke('scan_code_usage', { input }),
 
   // File watcher
   watchFolder:   (dirPath) => invoke('watch_folder', { dirPath }),

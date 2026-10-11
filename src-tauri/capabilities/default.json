@@ -2,7 +2,10 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capabilities for both windows",
-  "windows": ["main", "splash"],
+  "windows": [
+    "main",
+    "splash"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-show",
@@ -16,16 +19,39 @@
     {
       "identifier": "http:default",
       "allow": [
-        { "url": "https://api.mymemory.translated.net/*" },
-        { "url": "https://api-free.deepl.com/*" },
-        { "url": "https://api.deepl.com/*" },
-        { "url": "https://lingva.ml/*" },
-        { "url": "https://translate.plausibility.cloud/*" },
-        { "url": "https://lingva.thedaviddelta.com/*" },
-        { "url": "https://translate.googleapis.com/*" },
-        { "url": "https://libretranslate.de/*" },
-        { "url": "https://libretranslate.com/*" },
-        { "url": "http://localhost:*/*" }
+        {
+          "url": "https://api.anthropic.com/*"
+        },
+        {
+          "url": "https://api.mymemory.translated.net/*"
+        },
+        {
+          "url": "https://api-free.deepl.com/*"
+        },
+        {
+          "url": "https://api.deepl.com/*"
+        },
+        {
+          "url": "https://lingva.ml/*"
+        },
+        {
+          "url": "https://translate.plausibility.cloud/*"
+        },
+        {
+          "url": "https://lingva.thedaviddelta.com/*"
+        },
+        {
+          "url": "https://translate.googleapis.com/*"
+        },
+        {
+          "url": "https://libretranslate.de/*"
+        },
+        {
+          "url": "https://libretranslate.com/*"
+        },
+        {
+          "url": "http://localhost:*/*"
+        }
       ]
     }
   ]
