@@ -3,7 +3,8 @@ import { listen } from '@tauri-apps/api/event'
 import {
   Save, RotateCw, Undo2, Redo2, Sun, Moon, Settings as SettingsIcon,
   Plus, Trash2, Search, FolderKanban, ArrowRightLeft, TreePine, Table as TableIcon,
-  Sparkles, PauseCircle, ChevronRight, Filter, Command as CmdIcon,
+  Sparkles, PauseCircle, ChevronRight, Filter, Command as CmdIcon, AlertTriangle,
+  PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react'
 import { api } from './lib/api.js'
 import { FLAG, LANG_NAMES, flagFor, uid, snap } from './lib/consts.js'
@@ -27,6 +28,11 @@ export default function App() {
     try { localStorage.setItem('i18n-theme', isDark ? 'dark' : 'light') } catch {}
   }, [isDark])
 
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('i18n-sidebar') === 'collapsed')
+  useEffect(() => {
+    try { localStorage.setItem('i18n-sidebar', sidebarCollapsed ? 'collapsed' : 'open') } catch {}
+  }, [sidebarCollapsed])
+
   // ── Data ──────────────────────────────────────────────────────────────────
   const [projects, setProjects] = useState([])
   const [currentProjectId, setCurrentProjectId] = useState(null)
@@ -40,6 +46,7 @@ export default function App() {
   const [viewMode, setViewMode] = useState('table')
   const [search, setSearch] = useState('')
   const [showEmptyOnly, setShowEmptyOnly] = useState(false)
+  const [showIssuesOnly, setShowIssuesOnly] = useState(false)
   const [newKey, setNewKey] = useState('')
   const [newLangCode, setNewLangCode] = useState('')
   const [newLangLabel, setNewLangLabel] = useState('')
@@ -66,6 +73,9 @@ export default function App() {
   const [showFindReplace, setShowFindReplace] = useState(false)
   const [dirtyLangs, setDirtyLangs] = useState(() => new Set())
   const [placeholderIssues, setPlaceholderIssues] = useState({})
+  const [flashCell, setFlashCell] = useState(null)
+  const issueCursorRef = useRef(-1)
+  const flashTimerRef = useRef(null)
   const tableRef = useRef(null)
 
   // ── History (undo / redo) ────────────────────────────────────────────────
@@ -109,6 +119,7 @@ export default function App() {
       if (e.key === 'y')                { e.preventDefault(); redo() }
       if (e.key === 'k')                { e.preventDefault(); setShowPalette(v => !v) }
       if (e.key === 'f' && e.shiftKey)  { e.preventDefault(); setShowFindReplace(true) }
+      if (e.key === 'b')                { e.preventDefault(); setSidebarCollapsed(v => !v) }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
@@ -245,7 +256,7 @@ export default function App() {
     const p = projects.find(x => x.id === id); if (!p) return
     setCurrentProjectId(id)
     setBaseLanguage(p.baseLanguage || p.languages?.[0]?.code || 'en')
-    setSearch(''); setShowEmptyOnly(false); setSelectedKeys(new Set())
+    setSearch(''); setShowEmptyOnly(false); setShowIssuesOnly(false); setSelectedKeys(new Set())
     await api.setLastProject(id)
     await loadProject(p)
   }
@@ -365,15 +376,24 @@ export default function App() {
 
   // ── Keys ────────────────────────────────────────────────────────────────
   const allKeys = stats.allKeys
+  // scanPlaceholderIssues walks keys then languages, so insertion order is
+  // already table order — next/prev navigation relies on that.
+  const issueList = useMemo(() => Object.keys(placeholderIssues).map(id => {
+    const i = id.indexOf(':')
+    return { lang: id.slice(0, i), key: id.slice(i + 1) }
+  }), [placeholderIssues])
+  const issueKeys = useMemo(() => new Set(issueList.map(x => x.key)), [issueList])
+
   const filteredKeys = useMemo(() => {
     const q = search.toLowerCase()
     return allKeys.filter(k => {
       if (showEmptyOnly && !languages.some(l => !translations[l.code]?.[k])) return false
+      if (showIssuesOnly && !issueKeys.has(k)) return false
       if (!q) return true
       if (k.toLowerCase().includes(q)) return true
       return languages.some(l => (translations[l.code]?.[k] || '').toLowerCase().includes(q))
     })
-  }, [allKeys, search, showEmptyOnly, languages, translations])
+  }, [allKeys, search, showEmptyOnly, showIssuesOnly, issueKeys, languages, translations])
 
   const searchNamespace = useMemo(() => {
     if (!search || !search.includes('.')) return null
@@ -762,6 +782,24 @@ export default function App() {
     setTimeout(() => tableRef.current?.scrollToKey?.(k), 60)
   }
 
+  const jumpToIssue = (dir = 1) => {
+    if (!issueList.length) return
+    const n = issueList.length
+    const i = ((issueCursorRef.current + dir) % n + n) % n
+    issueCursorRef.current = i
+    const { key, lang } = issueList[i]
+    setActiveTab('translations')
+    setViewMode('table')
+    if (!filteredKeys.includes(key)) { setSearch(''); setShowEmptyOnly(false) }
+    clearTimeout(flashTimerRef.current)
+    setFlashCell(null)
+    setTimeout(() => {
+      tableRef.current?.scrollToCell?.(key, lang)
+      setFlashCell({ key, lang })
+      flashTimerRef.current = setTimeout(() => setFlashCell(null), 1800)
+    }, 60)
+  }
+
   // ── Misc helpers ───────────────────────────────────────────────────────
   const showToast = (msg, type = 'success') => { setToast({ msg, type }); setTimeout(() => setToast(null), 3200) }
   const onCopyKey = (key) => {
@@ -778,9 +816,13 @@ export default function App() {
 
   // ─── Render ────────────────────────────────────────────────────────────
   return (
-    <div className="app">
+    <div className={`app ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+      <button className="sidebar-toggle" onClick={() => setSidebarCollapsed(v => !v)}
+        title={sidebarCollapsed ? 'Show sidebar (⌘B)' : 'Hide sidebar (⌘B)'}>
+        {sidebarCollapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
+      </button>
       {/* ── Sidebar ── */}
-      <aside className="sidebar">
+      <aside className="sidebar" inert={sidebarCollapsed ? '' : undefined}>
         <div className="sidebar-header" data-tauri-drag-region>
           <div className="brand-glyph" data-tauri-drag-region>i</div>
           <div data-tauri-drag-region>
@@ -851,6 +893,15 @@ export default function App() {
                 <strong>{stats.allKeys.length}</strong> keys
                 <span style={{ opacity: 0.4 }}>·</span>
                 <span className={stats.missingTotal ? 'missing' : 'ok'}>{stats.missingTotal} missing</span>
+                <span style={{ opacity: 0.4 }}>·</span>
+                {issueList.length ? (
+                  <button className="issues-link" onClick={e => jumpToIssue(e.shiftKey ? -1 : 1)}
+                    title="Placeholder mismatches — click to jump to the next one (⇧-click for previous)">
+                    <AlertTriangle size={11} /> {issueList.length} {issueList.length === 1 ? 'issue' : 'issues'}
+                  </button>
+                ) : (
+                  <span className="ok">0 issues</span>
+                )}
               </div>
               <div style={{ flex: 1 }} data-tauri-drag-region />
               <button className="btn ghost" onClick={() => setShowPalette(true)} title="Command palette (⌘K)"><CmdIcon size={14} /></button>
@@ -971,6 +1022,10 @@ export default function App() {
                     <input type="checkbox" checked={showEmptyOnly} onChange={e => setShowEmptyOnly(e.target.checked)} />
                     Missing only
                   </label>
+                  <label className="checkbox" title="Keys with placeholder mismatches">
+                    <input type="checkbox" checked={showIssuesOnly} onChange={e => setShowIssuesOnly(e.target.checked)} />
+                    Issues only{issueKeys.size > 0 && <span className="issues-count">{issueKeys.size}</span>}
+                  </label>
                   <div className="tabs" style={{ padding: 2 }}>
                     <button className={`tab ${viewMode === 'table' ? 'active' : ''}`} onClick={() => setViewMode('table')} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><TableIcon size={12} /> Table</button>
                     <button className={`tab ${viewMode === 'tree' ? 'active' : ''}`} onClick={() => setViewMode('tree')} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><TreePine size={12} /> Tree</button>
@@ -1040,6 +1095,7 @@ export default function App() {
                     filledByLang={stats.filled}
                     onReorderLang={reorderLanguages}
                     placeholderIssues={placeholderIssues}
+                    flashCell={flashCell}
                   />
                 ) : (
                   <TreeView
@@ -1113,6 +1169,7 @@ export default function App() {
             askAutoTranslate,
             setViewMode, setActiveTab, openSettings: () => setShowSettings(true),
             toggleTheme: () => setIsDark(v => !v),
+            sidebarCollapsed, toggleSidebar: () => setSidebarCollapsed(v => !v),
             jumpToKey,
           }}
           onClose={() => setShowPalette(false)}

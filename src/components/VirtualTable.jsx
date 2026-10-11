@@ -1,10 +1,32 @@
-import React, { forwardRef, useRef, useState, useImperativeHandle, memo } from 'react'
+import React, { forwardRef, useRef, useState, useImperativeHandle, memo, useMemo } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Sparkles, Trash2, Copy, Check, Hourglass } from 'lucide-react'
 import CellInput from './CellInput.jsx'
 import { flagFor } from '../lib/consts.js'
 
 const ROW_HEIGHT = 38
+const DEFAULT_WIDTH = { key: 300, val: 220 }
+const MIN_WIDTH = 80
+const WIDTHS_STORAGE = 'i18n-col-widths'
+
+// Widths live in CSS variables on the scroll container, so dragging a column
+// edge doesn't re-render the memoized rows.
+const widthVar = (col) => `--w-${col.replace(/[^\w-]/g, '_')}`
+const valWidth = (code) => `var(${widthVar('lang-' + code)}, ${DEFAULT_WIDTH.val}px)`
+const KEY_WIDTH = `var(${widthVar('key')}, ${DEFAULT_WIDTH.key}px)`
+
+function loadWidths() {
+  try { return JSON.parse(localStorage.getItem(WIDTHS_STORAGE)) || {} } catch { return {} }
+}
+
+function ResizeHandle({ onStart, onReset }) {
+  return (
+    <span className="col-resize" draggable={false}
+      onMouseDown={onStart} onDoubleClick={onReset}
+      onClick={e => e.stopPropagation()}
+      title="Drag to resize · double-click to reset" />
+  )
+}
 
 function Highlight({ text, query }) {
   if (!query || !text) return text
@@ -20,14 +42,14 @@ function Highlight({ text, query }) {
 const Row = memo(function Row({
   rowKey, languages, translations, baseLanguage, search,
   selected, onToggleSelect, onCommit, onDelete, onCopyKey, copiedKey,
-  translating, onAutoTranslate, placeholderIssues,
+  translating, onAutoTranslate, placeholderIssues, flashLang,
 }) {
   return (
     <div className="trow" style={{ minHeight: ROW_HEIGHT }}>
       <div className="tcell select sticky">
         <input type="checkbox" checked={selected} onChange={() => onToggleSelect(rowKey)} />
       </div>
-      <div className="tcell key sticky" style={{ left: 34 }}>
+      <div className="tcell key sticky" style={{ left: 34, width: KEY_WIDTH }}>
         <button className={`copy-key ${copiedKey === rowKey ? 'copied' : ''}`} onClick={() => onCopyKey(rowKey)} title="Click to copy">
           {copiedKey === rowKey
             ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Check size={11} /> Copied!</span>
@@ -40,7 +62,9 @@ const Row = memo(function Row({
         const tKey = `${rowKey}-${lang.code}`
         const issue = placeholderIssues?.[`${lang.code}:${rowKey}`]
         return (
-          <div key={lang.code} className={`tcell val ${empty ? 'missing' : ''}`}>
+          <div key={lang.code} data-cell={`${lang.code}:${rowKey}`}
+            className={`tcell val ${empty ? 'missing' : ''} ${flashLang === lang.code ? 'flash' : ''}`}
+            style={{ width: valWidth(lang.code) }}>
             <CellInput
               value={val}
               missing={empty}
@@ -68,17 +92,72 @@ export default forwardRef(function VirtualTable(props, apiRef) {
     keys, languages, translations, baseLanguage, search,
     selectedKeys, onToggleSelect, onCommit, onDelete, onCopyKey, copiedKey,
     translating, onAutoTranslate, onToggleAll, allChecked, allIndeterminate,
-    filledByLang, onReorderLang, placeholderIssues,
+    filledByLang, onReorderLang, placeholderIssues, flashCell,
   } = props
 
   const parentRef = useRef(null)
   const [dragCode, setDragCode] = useState(null)
   const [dropCode, setDropCode] = useState(null)
+  const [widths, setWidths] = useState(loadWidths)
+  const resizingRef = useRef(false)
+
+  const widthStyle = useMemo(() => {
+    const st = {}
+    for (const [col, w] of Object.entries(widths)) st[widthVar(col)] = `${w}px`
+    return st
+  }, [widths])
+
+  const saveWidths = (next) => {
+    try { localStorage.setItem(WIDTHS_STORAGE, JSON.stringify(next)) } catch {}
+  }
+
+  const startResize = (col, fallback) => (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const startX = e.clientX
+    const startW = e.currentTarget.parentElement.getBoundingClientRect().width || fallback
+    let latest = null
+    resizingRef.current = true
+    document.body.classList.add('col-resizing')
+    const onMove = (ev) => {
+      const w = Math.max(MIN_WIDTH, Math.round(startW + ev.clientX - startX))
+      setWidths(prev => (latest = { ...prev, [col]: w }))
+    }
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.classList.remove('col-resizing')
+      resizingRef.current = false
+      if (latest) saveWidths(latest)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  const resetWidth = (col) => () => {
+    setWidths(prev => {
+      const next = { ...prev }
+      delete next[col]
+      saveWidths(next)
+      return next
+    })
+  }
 
   useImperativeHandle(apiRef, () => ({
     scrollToKey: (k) => {
       const idx = keys.indexOf(k)
       if (idx >= 0) virt.scrollToIndex(idx, { align: 'center' })
+    },
+    scrollToCell: (k, langCode) => {
+      const idx = keys.indexOf(k)
+      if (idx < 0) return
+      virt.scrollToIndex(idx, { align: 'center', behavior: 'smooth' })
+      // The row only exists in the DOM once virtualized into view, so the
+      // horizontal adjustment has to wait for the vertical scroll to land.
+      setTimeout(() => {
+        parentRef.current?.querySelector(`[data-cell="${CSS.escape(`${langCode}:${k}`)}"]`)
+          ?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' })
+      }, 450)
     },
   }), [keys])
   const virt = useVirtualizer({
@@ -89,7 +168,7 @@ export default forwardRef(function VirtualTable(props, apiRef) {
   })
 
   return (
-    <div ref={parentRef} className="table-wrap">
+    <div ref={parentRef} className="table-wrap" style={widthStyle}>
       {/* header */}
       <div className="trow header">
         <div className="tcell select sticky">
@@ -100,7 +179,10 @@ export default forwardRef(function VirtualTable(props, apiRef) {
             onChange={onToggleAll}
           />
         </div>
-        <div className="tcell key sticky" style={{ left: 34 }}>Key</div>
+        <div className="tcell key sticky" style={{ left: 34, width: KEY_WIDTH }}>
+          Key
+          <ResizeHandle onStart={startResize('key', DEFAULT_WIDTH.key)} onReset={resetWidth('key')} />
+        </div>
         {languages.map(lang => {
           const pct = keys.length ? Math.round((filledByLang[lang.code] || 0) / keys.length * 100) : 100
           const isDrag = dragCode === lang.code
@@ -108,9 +190,10 @@ export default forwardRef(function VirtualTable(props, apiRef) {
           return (
             <div key={lang.code}
               className={`tcell val ${isDrag ? 'dragging' : ''} ${isDrop ? 'drop-target' : ''}`}
-              style={{ display: 'flex', gap: 4 }}
+              style={{ display: 'flex', gap: 4, width: valWidth(lang.code) }}
               draggable={!!onReorderLang}
               onDragStart={(e) => {
+                if (resizingRef.current) { e.preventDefault(); return }
                 setDragCode(lang.code)
                 e.dataTransfer.effectAllowed = 'move'
                 try { e.dataTransfer.setData('text/plain', lang.code) } catch {}
@@ -130,6 +213,7 @@ export default forwardRef(function VirtualTable(props, apiRef) {
               <span>{lang.label}</span>
               {lang.code === baseLanguage && <span style={{ fontSize: 10, color: 'var(--accent)' }}>base</span>}
               <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--text-faint)' }}>{pct}%</span>
+              <ResizeHandle onStart={startResize('lang-' + lang.code, DEFAULT_WIDTH.val)} onReset={resetWidth('lang-' + lang.code)} />
             </div>
           )
         })}
@@ -160,6 +244,7 @@ export default forwardRef(function VirtualTable(props, apiRef) {
                 translating={translating}
                 onAutoTranslate={onAutoTranslate}
                 placeholderIssues={placeholderIssues}
+                flashLang={flashCell?.key === k ? flashCell.lang : null}
               />
             </div>
           )

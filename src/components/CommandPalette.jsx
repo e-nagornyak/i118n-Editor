@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Search, FolderKanban, Languages, KeyRound, Save, RotateCw, Sparkles, Sun, Moon,
   Settings as SettingsIcon, Trash2, ScrollText, Table, TreePine, Replace,
+  PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react'
 
 // Small unicode-forgiving substring matcher — good enough for command lists
@@ -37,6 +38,7 @@ export default function CommandPalette({ ctx, onClose }) {
       { icon: TreePine,       label: 'View: Tree',          run: () => ctx.setViewMode('tree') },
       { icon: SettingsIcon,   label: 'Settings',            run: ctx.openSettings },
       { icon: ctx.isDark ? Sun : Moon, label: ctx.isDark ? 'Switch to Light theme' : 'Switch to Dark theme', run: ctx.toggleTheme },
+      { icon: ctx.sidebarCollapsed ? PanelLeftOpen : PanelLeftClose, label: ctx.sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar', hint: '⌘B', run: ctx.toggleSidebar },
       { icon: ScrollText,     label: 'Open Logs',           run: () => ctx.setActiveTab('logs') },
       { icon: FolderKanban,   label: 'New Project',         run: ctx.newProject },
     ]

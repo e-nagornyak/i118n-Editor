@@ -75,7 +75,26 @@ button { cursor: pointer; }
   grid-template-rows: 1fr;
   height: 100vh;
   overflow: hidden;
+  transition: grid-template-columns .22s ease;
 }
+.app.sidebar-collapsed { grid-template-columns: 0 1fr; }
+.app.sidebar-collapsed .sidebar { border-right-width: 0; }
+/* Children keep their full width while the column animates, so text clips
+   instead of reflowing. */
+.sidebar > * { min-width: 240px; }
+
+/* Sits in the title-bar strip right of the macOS traffic lights. */
+.sidebar-toggle {
+  position: fixed; top: 4px; left: 78px; z-index: 50;
+  width: 26px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; border-radius: 5px;
+  background: transparent; color: var(--text-muted);
+  -webkit-app-region: no-drag;
+}
+.sidebar-toggle:hover { background: var(--surface-3); color: var(--text); }
+.topbar { transition: padding-left .22s ease; }
+.app.sidebar-collapsed .topbar { padding-left: 114px; }
 
 /* Sidebar */
 .sidebar {
@@ -672,3 +691,41 @@ button { cursor: pointer; }
 }
 .footer .sep { color: var(--text-faint); }
 .footer .right { margin-left: auto; }
+
+/* Placeholder issues: topbar counter, filter badge, jump highlight */
+.stat-chip .issues-link {
+  display: inline-flex; align-items: center; gap: 4px;
+  border: none; background: none; padding: 0;
+  color: var(--warn); font: inherit; font-weight: 700;
+  cursor: pointer;
+}
+.stat-chip .issues-link:hover { text-decoration: underline; }
+.issues-count {
+  font-size: 10px; font-weight: 700;
+  color: var(--warn);
+  background: rgba(245,158,11,.15);
+  padding: 1px 6px;
+  border-radius: 10px;
+}
+/* Keeps a jumped-to cell clear of the sticky checkbox + key columns. */
+.tcell.val { scroll-margin-left: calc(var(--w-key, 300px) + 40px); }
+.tcell.val.flash { animation: cellFlash 1.8s ease-out; }
+@keyframes cellFlash {
+  0%, 30% { box-shadow: inset 0 0 0 2px var(--warn); background: rgba(245,158,11,.22); }
+  100%    { box-shadow: inset 0 0 0 2px transparent; }
+}
+
+/* Column resize grip on the right edge of header cells */
+.trow.header .tcell { position: relative; }
+.trow.header .tcell.sticky { position: sticky; }
+.col-resize {
+  position: absolute; top: 0; right: -4px; bottom: 0; width: 8px;
+  cursor: col-resize; z-index: 7;
+}
+.col-resize::after {
+  content: ''; position: absolute; top: 20%; bottom: 20%; left: 3px; width: 2px;
+  border-radius: 1px; background: transparent; transition: background .12s;
+}
+.col-resize:hover::after, .col-resizing .col-resize:hover::after { background: var(--accent); }
+body.col-resizing { cursor: col-resize; user-select: none; }
+body.col-resizing * { cursor: col-resize !important; }
