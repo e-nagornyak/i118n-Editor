@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { Undo2 } from 'lucide-react'
 import { testProvider, PROVIDERS, getProvider, CLAUDE_MODELS } from '../lib/translate.js'
 import { FLAG } from '../lib/consts.js'
 
@@ -191,52 +192,89 @@ export function AutoTranslateModal({ config, initialDelay, onStart, onCancel }) 
   )
 }
 
-export function DiffModal({ diff, onConfirm, onCancel }) {
-  const [expanded, setExpanded] = useState({})
+const KIND_META = {
+  added:   { sign: '+', color: 'var(--success)', title: 'Remove this new key' },
+  changed: { sign: '~', color: 'var(--warn)',    title: 'Restore the value from disk' },
+  deleted: { sign: '−', color: 'var(--danger)',  title: 'Bring this key back' },
+}
+
+function DiffEntry({ kind, k, before, after, onRevert }) {
+  const meta = KIND_META[kind]
+  return (
+    <div className="diff-entry">
+      <div className="diff-entry-main">
+        <div style={{ color: meta.color }}>{meta.sign} {k}</div>
+        {kind === 'changed' && (<>
+          <div className="diff-old">{before || <em>empty</em>}</div>
+          <div className="diff-new">{after || <em>empty</em>}</div>
+        </>)}
+        {kind === 'added' && after && <div className="diff-new">{after}</div>}
+        {kind === 'deleted' && <div className="diff-old">{before || <em>empty</em>}</div>}
+      </div>
+      <button className="diff-revert" title={meta.title} onClick={onRevert}><Undo2 size={12} /></button>
+    </div>
+  )
+}
+
+export function DiffModal({ diff, translations, onRevert, onConfirm, onCancel }) {
+  const [expanded, setExpanded] = useState(() => diff.length === 1 || diff.filter(d => d.added.length + d.changed.length + d.deleted.length).length === 1
+    ? Object.fromEntries(diff.map((_, i) => [i, true])) : {})
   const totals = diff.reduce((a, d) => ({
     added:   a.added   + (d.added?.length   || 0),
     changed: a.changed + (d.changed?.length || 0),
     deleted: a.deleted + (d.deleted?.length || 0),
   }), { added: 0, changed: 0, deleted: 0 })
   const noChanges = totals.added + totals.changed + totals.deleted === 0 && !diff.some(d => d.newFile)
+  const entriesOf = (d) => [
+    ...d.added.map(key => ({ lang: d.lang, kind: 'added', key })),
+    ...d.changed.map(key => ({ lang: d.lang, kind: 'changed', key })),
+    ...d.deleted.map(key => ({ lang: d.lang, kind: 'deleted', key })),
+  ]
 
   return (
     <div className="modal-overlay" onClick={onCancel}>
-      <div className="modal" style={{ width: 580, maxHeight: '80vh', display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
+      <div className="modal" style={{ width: 640, maxHeight: '80vh', display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
         <h2>💾 Rewrite Preview</h2>
         <div className="sub">
-          {noChanges ? 'No changes detected.' : `Total: +${totals.added} added, ~${totals.changed} changed, −${totals.deleted} deleted`}
+          {noChanges ? 'No changes left to write.' : `Total: +${totals.added} added, ~${totals.changed} changed, −${totals.deleted} deleted`}
         </div>
         <div style={{ flex: 1, overflow: 'auto', marginBottom: 12 }}>
-          {diff.map((d, i) => (
-            <div key={i} style={{ marginBottom: 10, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-              <div style={{ background: 'var(--surface-2)', padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
-                <span style={{ fontSize: 16 }}>{FLAG[d.lang] || '🌐'}</span>
-                <strong>{d.label || d.lang}</strong>
-                {d.newFile && <span style={{ fontSize: 11, color: 'var(--warn)' }}>📄 new file</span>}
-                {!d.newFile && (
-                  <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
-                    {d.added.length > 0 && <span style={{ color: 'var(--success)' }}> +{d.added.length} </span>}
-                    {d.changed.length > 0 && <span style={{ color: 'var(--warn)' }}>~{d.changed.length} </span>}
-                    {d.deleted.length > 0 && <span style={{ color: 'var(--danger)' }}>−{d.deleted.length}</span>}
-                    {d.added.length + d.changed.length + d.deleted.length === 0 && <span>no changes</span>}
-                  </span>
-                )}
-                {(d.added.length + d.changed.length + d.deleted.length) > 0 && (
-                  <button className="btn ghost small" style={{ marginLeft: 'auto' }} onClick={() => setExpanded(p => ({ ...p, [i]: !p[i] }))}>
-                    {expanded[i] ? '▾ hide' : '▸ show'}
-                  </button>
+          {diff.map((d, i) => {
+            const count = d.added.length + d.changed.length + d.deleted.length
+            return (
+              <div key={d.lang} style={{ marginBottom: 10, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+                <div style={{ background: 'var(--surface-2)', padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
+                  <span style={{ fontSize: 16 }}>{FLAG[d.lang] || '🌐'}</span>
+                  <strong>{d.label || d.lang}</strong>
+                  {d.newFile && <span style={{ fontSize: 11, color: 'var(--warn)' }}>📄 new file</span>}
+                  {!d.newFile && (
+                    <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+                      {d.added.length > 0 && <span style={{ color: 'var(--success)' }}> +{d.added.length} </span>}
+                      {d.changed.length > 0 && <span style={{ color: 'var(--warn)' }}>~{d.changed.length} </span>}
+                      {d.deleted.length > 0 && <span style={{ color: 'var(--danger)' }}>−{d.deleted.length}</span>}
+                      {count === 0 && <span>no changes</span>}
+                    </span>
+                  )}
+                  {count > 0 && (<>
+                    <button className="btn ghost small" style={{ marginLeft: 'auto' }} title="Revert every change in this language"
+                      onClick={() => onRevert(entriesOf(d))}><Undo2 size={11} /> Revert all</button>
+                    <button className="btn ghost small" onClick={() => setExpanded(p => ({ ...p, [i]: !p[i] }))}>
+                      {expanded[i] ? '▾ hide' : '▸ show'}
+                    </button>
+                  </>)}
+                </div>
+                {expanded[i] && count > 0 && (
+                  <div className="diff-list">
+                    {entriesOf(d).map(e => (
+                      <DiffEntry key={e.kind + e.key} kind={e.kind} k={e.key}
+                        before={d.before?.[e.key]} after={translations?.[d.lang]?.[e.key]}
+                        onRevert={() => onRevert([e])} />
+                    ))}
+                  </div>
                 )}
               </div>
-              {expanded[i] && (
-                <div style={{ padding: '8px 12px', maxHeight: 200, overflow: 'auto', fontFamily: '"SF Mono", Menlo, monospace', fontSize: 11 }}>
-                  {d.added.map(k => <div key={k} style={{ color: 'var(--success)' }}>+ {k}</div>)}
-                  {d.changed.map(k => <div key={k} style={{ color: 'var(--warn)' }}>~ {k}</div>)}
-                  {d.deleted.map(k => <div key={k} style={{ color: 'var(--danger)' }}>− {k}</div>)}
-                </div>
-              )}
-            </div>
-          ))}
+            )
+          })}
         </div>
         <div className="actions" style={{ marginTop: 0 }}>
           <button className="btn outline" onClick={onCancel}>Cancel</button>

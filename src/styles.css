@@ -801,3 +801,20 @@ body.col-resizing * { cursor: col-resize !important; }
   font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px;
 }
 .stale-refresh:hover { background: rgba(245,158,11,.22); }
+
+/* Rewrite preview entries */
+.diff-list { max-height: 320px; overflow: auto; font-size: 11.5px; }
+.diff-entry { display: flex; align-items: flex-start; gap: 8px; padding: 6px 12px; border-top: 1px solid var(--border); }
+.diff-entry:hover { background: var(--surface-2); }
+.diff-entry-main { flex: 1; min-width: 0; font-family: 'SF Mono', Menlo, monospace; display: flex; flex-direction: column; gap: 2px; }
+.diff-old, .diff-new { font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-size: 12px; padding: 1px 6px; border-radius: 4px; white-space: pre-wrap; word-break: break-word; }
+.diff-old { color: var(--text-muted); background: rgba(239,68,68,.08); text-decoration: line-through; text-decoration-color: rgba(239,68,68,.5); }
+.diff-new { color: var(--text); background: rgba(16,185,129,.1); }
+.diff-old em, .diff-new em { opacity: .6; }
+.diff-revert {
+  flex-shrink: 0; margin-top: 1px; display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 22px; border: 1px solid var(--border); border-radius: 5px;
+  background: var(--surface); color: var(--text-muted); opacity: .6;
+}
+.diff-entry:hover .diff-revert { opacity: 1; }
+.diff-revert:hover { color: var(--accent); border-color: var(--accent); }

@@ -378,6 +378,9 @@ pub struct LangDiff {
     pub added: Vec<String>,
     pub changed: Vec<String>,
     pub deleted: Vec<String>,
+    /// On-disk values of changed and deleted keys — lets the UI show the old
+    /// text and revert a single entry.
+    pub before: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -401,7 +404,7 @@ pub fn compute_diff(input: DiffInput) -> (Vec<LangDiff>, BTreeMap<String, JsonFo
                     None,
                     LangDiff {
                         lang: lang.code.clone(), label: lang.label.clone(),
-                        new_file: true, added: vec![], changed: vec![], deleted: vec![],
+                        new_file: true, added: vec![], changed: vec![], deleted: vec![], before: BTreeMap::new(),
                     },
                 );
             };
@@ -422,9 +425,12 @@ pub fn compute_diff(input: DiffInput) -> (Vec<LangDiff>, BTreeMap<String, JsonFo
                 .filter(|(k, v)| existing.get(*k).map(|e| e != *v).unwrap_or(false))
                 .map(|(k, _)| k.clone())
                 .collect();
+            let before = changed.iter().chain(&deleted)
+                .filter_map(|k| existing.get(k).map(|v| (k.clone(), v.clone())))
+                .collect();
             (
                 lang.code.clone(), fmt,
-                LangDiff { lang: lang.code.clone(), label: lang.label.clone(), new_file: false, added, changed, deleted },
+                LangDiff { lang: lang.code.clone(), label: lang.label.clone(), new_file: false, added, changed, deleted, before },
             )
         })
         .collect::<Vec<_>>()

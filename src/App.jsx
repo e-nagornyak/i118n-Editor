@@ -767,6 +767,35 @@ export default function App() {
     }
   }
 
+  // Puts entries from the rewrite preview back to what's on disk and drops
+  // them from the preview. entries: [{ lang, kind: added|changed|deleted, key }]
+  const revertDiff = (entries) => {
+    if (!diffData || !entries.length) return
+    const before = Object.fromEntries(diffData.map(d => [d.lang, d.before || {}]))
+    setTranslations(prev => {
+      const next = { ...prev }
+      for (const { lang, kind, key } of entries) {
+        const m = next[lang] === prev[lang] ? { ...(prev[lang] || {}) } : next[lang]
+        if (kind === 'added') delete m[key]
+        else m[key] = before[lang][key]
+        next[lang] = m
+      }
+      recordNow(next)
+      transRef.current = next
+      refreshStats(next, languages)
+      return next
+    })
+    const drop = new Set(entries.map(e => `${e.lang}\u0000${e.kind}\u0000${e.key}`))
+    const nextDiff = diffData.map(d => {
+      const keep = (kind) => (k) => !drop.has(`${d.lang}\u0000${kind}\u0000${k}`)
+      return { ...d, added: d.added.filter(keep('added')), changed: d.changed.filter(keep('changed')), deleted: d.deleted.filter(keep('deleted')) }
+    })
+    setDiffData(nextDiff)
+    const clean = nextDiff.filter(d => !d.newFile && !d.added.length && !d.changed.length && !d.deleted.length).map(d => d.lang)
+    setDirtyLangs(prev => new Set([...prev].filter(c => !clean.includes(c))))
+    log.info('save', `reverted ${entries.length} change(s) from preview`)
+  }
+
   const executeRewrite = async () => {
     setDiffData(null); setRewriting(true); setRewriteStatus('Saving…')
     const errors = []
@@ -1343,7 +1372,7 @@ export default function App() {
         confirmLabel={confirmDlg.confirmLabel}
         variant={confirmDlg.variant} />}
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
-      {diffData && <DiffModal diff={diffData} onConfirm={executeRewrite} onCancel={() => setDiffData(null)} />}
+      {diffData && <DiffModal diff={diffData} translations={translations} onRevert={revertDiff} onConfirm={executeRewrite} onCancel={() => setDiffData(null)} />}
       {autoConfig && (
         <AutoTranslateModal
           config={autoConfig}
