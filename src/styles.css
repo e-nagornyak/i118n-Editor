@@ -795,3 +795,9 @@ body.col-resizing * { cursor: col-resize !important; }
 .usage-key { font-family: 'SF Mono', Menlo, monospace; color: var(--accent); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .usage-loc { font-family: 'SF Mono', Menlo, monospace; font-size: 11px; color: var(--text-faint); max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
 .stat-chip .issues-link.hint { color: var(--text-muted); font-weight: 600; }
+.stale-refresh {
+  display: inline-flex; align-items: center; gap: 4px; margin-right: 8px;
+  border: 1px solid var(--warn); background: rgba(245,158,11,.12); color: var(--warn);
+  font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px;
+}
+.stale-refresh:hover { background: rgba(245,158,11,.22); }

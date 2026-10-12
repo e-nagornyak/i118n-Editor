@@ -437,16 +437,32 @@ export default function App() {
   }, [errorList])
   const issueKeys = useMemo(() => new Set(issueList.map(x => x.key)), [issueList])
 
-  const filteredKeys = useMemo(() => {
+  // A row that matched stays visible while it's being edited — otherwise
+  // fixing the very text you searched for makes the row vanish. Results are
+  // re-derived from scratch only when the query/filters change or on refresh.
+  const [filterNonce, setFilterNonce] = useState(0)
+  const filterRef = useRef({ sig: null, visible: null })
+  const { filteredKeys, staleCount } = useMemo(() => {
     const q = search.toLowerCase()
-    return allKeys.filter(k => {
+    const matches = (k) => {
       if (showEmptyOnly && !languages.some(l => !translations[l.code]?.[k])) return false
       if (showIssuesOnly && !issueKeys.has(k)) return false
       if (!q) return true
       if (k.toLowerCase().includes(q)) return true
       return languages.some(l => (translations[l.code]?.[k] || '').toLowerCase().includes(q))
+    }
+    const sig = JSON.stringify([search, showEmptyOnly, showIssuesOnly, currentProjectId, filterNonce])
+    const prev = filterRef.current.sig === sig ? filterRef.current.visible : null
+    let stale = 0
+    const keys = allKeys.filter(k => {
+      if (matches(k)) return true
+      if (prev?.has(k)) { stale++; return true }
+      return false
     })
-  }, [allKeys, search, showEmptyOnly, showIssuesOnly, issueKeys, languages, translations])
+    filterRef.current = { sig, visible: new Set(keys) }
+    return { filteredKeys: keys, staleCount: stale }
+  }, [allKeys, search, showEmptyOnly, showIssuesOnly, issueKeys, languages, translations, currentProjectId, filterNonce])
+  const refreshFilter = () => setFilterNonce(n => n + 1)
 
   const searchNamespace = useMemo(() => {
     if (!search || !search.includes('.')) return null
@@ -1184,7 +1200,8 @@ export default function App() {
                 <div className="toolbar">
                   <div className="search-wrap">
                     <span className="icon">🔍</span>
-                    <input className="input" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search keys or values…" />
+                    <input className="input" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search keys or values…"
+                      onKeyDown={e => { if (e.key === 'Enter') refreshFilter() }} />
                     {search && <button className="clear" onClick={() => setSearch('')}>✕</button>}
                     {searchNamespace && <span className="namespace-hint">📂 {searchNamespace}</span>}
                   </div>
@@ -1211,6 +1228,12 @@ export default function App() {
                     <button className="btn primary" onClick={addKey}>+ Add Key</button>
                   </div>
                   <span style={{ color: 'var(--text-faint)', fontSize: 11, fontVariantNumeric: 'tabular-nums' }}>
+                    {staleCount > 0 && (
+                      <button className="stale-refresh" onClick={refreshFilter}
+                        title="These rows no longer match the search or filters — they stay visible while you edit. Click (or press Enter in search) to re-apply.">
+                        <RotateCw size={11} /> {staleCount} no longer match{staleCount === 1 ? 'es' : ''}
+                      </button>
+                    )}
                     {filteredKeys.length} / {stats.allKeys.length}
                   </span>
                 </div>
